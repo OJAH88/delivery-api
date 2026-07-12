@@ -40,7 +40,19 @@ def approve_user(user_id: int, db: Session = Depends(get_db)):
 # NEW: Fetches your live inventory for the storefront
 @admin_router.get("/products")
 def get_all_products(db: Session = Depends(get_db)):
-    result = db.execute(text("SELECT product_id, name, base_sticker_price, category FROM products WHERE is_visible = TRUE")).fetchall()
+    query = """
+        SELECT 
+            p.product_id, 
+            p.name, 
+            p.base_sticker_price, 
+            c.name as category,
+            t.name as tier_name
+        FROM products p
+        LEFT JOIN categories c ON p.category_id = c.category_id
+        LEFT JOIN price_tiers t ON p.tier_id = t.tier_id
+        WHERE p.is_visible = TRUE
+    """
+    result = db.execute(text(query)).fetchall()
     return [dict(row._mapping) for row in result]
 
 @admin_router.post("/products/{product_id}/toggle")
