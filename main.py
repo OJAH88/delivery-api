@@ -37,6 +37,12 @@ def approve_user(user_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "User approved"}
 
+# NEW: Fetches your live inventory for the storefront
+@admin_router.get("/products")
+def get_all_products(db: Session = Depends(get_db)):
+    result = db.execute(text("SELECT product_id, name, base_sticker_price, category FROM products WHERE is_visible = TRUE")).fetchall()
+    return [dict(row._mapping) for row in result]
+
 @admin_router.post("/products/{product_id}/toggle")
 def toggle_product_visibility(product_id: int, payload: dict, db: Session = Depends(get_db)):
     db.execute(text("UPDATE products SET is_visible = :visible WHERE product_id = :id"), {"visible": payload.get("is_visible"), "id": product_id})
