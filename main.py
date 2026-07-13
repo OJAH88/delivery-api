@@ -15,7 +15,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def get_products():
     db = SessionLocal()
     try:
-        # Re-added the JOIN to get tier_name so the math engine can group by it
+        # Tries to get the tier_name
         query = """
             SELECT p.product_id, p.name, COALESCE(p.base_sticker_price, 0.0) as base_sticker_price, p.category_id, t.name as tier_name 
             FROM products p
@@ -24,11 +24,15 @@ def get_products():
         result = db.execute(text(query)).fetchall()
         return [dict(row._mapping) for row in result]
     except Exception as e:
-        print("Inventory Error:", e)
-        return []
+        # FAILSAFE: If price_tiers is broken or missing, pull products anyway so items don't disappear
+        try:
+            fallback = "SELECT product_id, name, COALESCE(base_sticker_price, 0.0) as base_sticker_price, category_id FROM products"
+            result = db.execute(text(fallback)).fetchall()
+            return [dict(row._mapping) for row in result]
+        except:
+            return []
     finally:
         db.close()
-
 
 @app.post("/api/cart/calculate")
 async def calculate_cart(request: Request):
@@ -36,29 +40,29 @@ async def calculate_cart(request: Request):
         payload = await request.json()
         items = payload.get("items", [])
         
-        # 1. Group by Tier: Count total quantity of items per tier across the whole cart
-        tier_counts = {}
+        # 1. Bulletproof Grouping
+        group_counts = {}
         for item in items:
-            tier = item.get('tier_name')
+            # Grabs tier_name. If null, grabs category_id.
+            group_key = str(item.get('tier_name') or item.get('category_id') or 'unknown')
             qty = int(item.get('qty') or 1)
-            if tier:
-                tier_counts[tier] = tier_counts.get(tier, 0) + qty
+            group_counts[group_key] = group_counts.get(group_key, 0) + qty
                 
         raw_total = 0.0
         discount_applied = 0.0
         
-        # 2. Calculate Math: Apply discounts based on the tier totals
+        # 2. Math Engine
         for item in items:
             price = float(item.get('base_sticker_price') or 0)
             qty = int(item.get('qty') or 1)
-            tier = item.get('tier_name')
+            group_key = str(item.get('tier_name') or item.get('category_id') or 'unknown')
             
             item_total = price * qty
             raw_total += item_total
             
-            # BULK LOGIC: If the user has 2 or more TOTAL items in the 'Flower' tier...
-            if tier == 'Flower' and tier_counts.get('Flower', 0) >= 2:
-                # ...take $5 off EVERY unit of flower they buy
+            # BULK LOGIC: Checks if the group is 'Flower' OR ID '1'. 
+            # If the total items in that group are 2 or more, apply the discount to all.
+            if group_key in ['Flower', '1'] and group_counts.get(group_key, 0) >= 2:
                 discount_applied += (5.0 * qty)
                 
         final_total = max(0.0, raw_total - discount_applied)
