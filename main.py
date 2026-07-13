@@ -11,36 +11,40 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 app = FastAPI(title="Delivery App API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
 
+# THE ROUTE THAT WAS CAUSING THE 404
+@app.get("/api/admin/products")
+def get_products():
+    db = SessionLocal()
+    try:
+        # Fetching product and tier info
+        query = """
+            SELECT p.product_id, p.name, p.base_sticker_price, p.category_id, t.name as tier_name 
+            FROM products p
+            LEFT JOIN price_tiers t ON p.tier_id = t.tier_id
+        """
+        result = db.execute(text(query)).fetchall()
+        return [dict(row._mapping) for row in result]
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        db.close()
+
 @app.post("/api/cart/calculate")
 async def calculate_cart(request: Request):
     db = SessionLocal()
     try:
         payload = await request.json()
         items = payload.get("items", [])
-        
         raw_total = 0.0
-        
-        # Aggregate quantity per product and apply Tier logic
         for item in items:
             price = float(item.get('base_sticker_price') or 0)
             qty = int(item.get('qty') or 1)
-            tier_name = item.get('tier_name') # This comes from your JOIN in the products table
-            
-            # BULK LOGIC: Apply tier discounts based on quantity
-            # Example: If tier is 'Flower', apply specific bulk price scaling
-            if tier_name == 'Flower' and qty >= 2:
-                # Example bulk rule: $X off per item for qty 2+
-                price = price - 5.0 
-            
+            tier = item.get('tier_name')
+            # Apply your specific bulk pricing logic here
+            if tier == 'Flower' and qty >= 2:
+                price = price - 5.0
             raw_total += (price * qty)
-        
-        final_cash_total = round(raw_total / 5.0) * 5
-        
-        return {
-            "raw_total": float(raw_total),
-            "discount_applied": 0.0, # We don't need this if we use tiered pricing
-            "final_cash_total": float(final_cash_total)
-        }
+        return {"raw_total": float(raw_total), "final_cash_total": round(raw_total / 5.0) * 5}
     except Exception as e:
         return {"error": str(e)}
     finally:
