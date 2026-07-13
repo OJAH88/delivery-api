@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, APIRouter
 from pydantic import BaseModel
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
@@ -19,6 +19,23 @@ def get_db():
 app = FastAPI(title="Delivery App API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+# --- CART CALCULATION ROUTE ---
+@app.post("/api/cart/calculate")
+async def calculate_cart(request: Request):
+    payload = await request.json()
+    cart_items = payload.get("items", [])
+    
+    # Simple calculation logic
+    raw_total = sum((item.get('base_sticker_price', 0) * item.get('qty', 1)) for item in cart_items)
+    final_cash_total = round(raw_total / 5.0) * 5
+    
+    return {
+        "raw_total": raw_total,
+        "discount_applied": 0,
+        "final_cash_total": final_cash_total
+    }
+
+# --- ADMIN ROUTES ---
 admin_router = APIRouter(prefix="/api/admin")
 
 @admin_router.get("/cash-bank")
@@ -37,16 +54,10 @@ def approve_user(user_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "User approved"}
 
-# NEW: Fetches your live inventory for the storefront
 @admin_router.get("/products")
 def get_all_products(db: Session = Depends(get_db)):
     query = """
-        SELECT 
-            p.product_id, 
-            p.name, 
-            p.base_sticker_price, 
-            c.name as category,
-            t.name as tier_name
+        SELECT p.product_id, p.name, p.base_sticker_price, c.name as category, t.name as tier_name
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.category_id
         LEFT JOIN price_tiers t ON p.tier_id = t.tier_id
@@ -67,7 +78,7 @@ class PromotionPayload(BaseModel):
     trigger_qty_threshold: int
     reward_type: str
     reward_value: float
-    active_days: str 
+    active_days: str
     is_stackable: bool
 
 @admin_router.post("/promotions")
