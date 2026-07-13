@@ -11,15 +11,15 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/d
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# 1. RESTORED: The inventory route I stupidly deleted
 @app.get("/api/admin/products")
 def get_products():
     db = SessionLocal()
     try:
-        # The query we know works
+        # Re-added the JOIN to get tier_name so the math engine can group by it
         query = """
-            SELECT product_id, name, COALESCE(base_sticker_price, 0.0) as base_sticker_price, category_id 
-            FROM products
+            SELECT p.product_id, p.name, COALESCE(p.base_sticker_price, 0.0) as base_sticker_price, p.category_id, t.name as tier_name 
+            FROM products p
+            LEFT JOIN price_tiers t ON p.tier_id = t.tier_id
         """
         result = db.execute(text(query)).fetchall()
         return [dict(row._mapping) for row in result]
@@ -29,32 +29,38 @@ def get_products():
     finally:
         db.close()
 
-# 2. THE CART LOGIC
+
 @app.post("/api/cart/calculate")
 async def calculate_cart(request: Request):
     try:
         payload = await request.json()
         items = payload.get("items", [])
         
+        # 1. Group by Tier: Count total quantity of items per tier across the whole cart
+        tier_counts = {}
+        for item in items:
+            tier = item.get('tier_name')
+            qty = int(item.get('qty') or 1)
+            if tier:
+                tier_counts[tier] = tier_counts.get(tier, 0) + qty
+                
         raw_total = 0.0
         discount_applied = 0.0
         
+        # 2. Calculate Math: Apply discounts based on the tier totals
         for item in items:
             price = float(item.get('base_sticker_price') or 0)
             qty = int(item.get('qty') or 1)
-            
-            # Use category_id for bulk pricing. 
-            # Note: Change '1' to whatever your Flower category_id actually is.
-            cat_id = str(item.get('category_id')) 
+            tier = item.get('tier_name')
             
             item_total = price * qty
-            
-            # BULK LOGIC: If it's Flower and they buy 2 or more, give a flat discount
-            if cat_id == '1' and qty >= 2:
-                discount_applied += 5.0
-            
             raw_total += item_total
             
+            # BULK LOGIC: If the user has 2 or more TOTAL items in the 'Flower' tier...
+            if tier == 'Flower' and tier_counts.get('Flower', 0) >= 2:
+                # ...take $5 off EVERY unit of flower they buy
+                discount_applied += (5.0 * qty)
+                
         final_total = max(0.0, raw_total - discount_applied)
         final_cash_total = round(final_total / 5.0) * 5
         
