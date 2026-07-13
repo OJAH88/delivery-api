@@ -15,54 +15,73 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def get_products():
     db = SessionLocal()
     try:
-        # Tries to get the tier_name
-        query = """
-            SELECT p.product_id, p.name, COALESCE(p.base_sticker_price, 0.0) as base_sticker_price, p.category_id, t.name as tier_name 
-            FROM products p
-            LEFT JOIN price_tiers t ON p.tier_id = t.tier_id
-        """
-        result = db.execute(text(query)).fetchall()
+        try:
+            query = """
+                SELECT p.product_id, p.name, COALESCE(p.base_sticker_price, 0.0) as base_sticker_price, p.category_id, t.name as tier_name 
+                FROM products p
+                LEFT JOIN price_tiers t ON p.tier_id = t.tier_id
+            """
+            result = db.execute(text(query)).fetchall()
+        except:
+            # Fallback if price_tiers table is missing
+            query = "SELECT product_id, name, COALESCE(base_sticker_price, 0.0) as base_sticker_price, category_id FROM products"
+            result = db.execute(text(query)).fetchall()
+            
         return [dict(row._mapping) for row in result]
     except Exception as e:
-        # FAILSAFE: If price_tiers is broken or missing, pull products anyway so items don't disappear
-        try:
-            fallback = "SELECT product_id, name, COALESCE(base_sticker_price, 0.0) as base_sticker_price, category_id FROM products"
-            result = db.execute(text(fallback)).fetchall()
-            return [dict(row._mapping) for row in result]
-        except:
-            return []
+        return []
     finally:
         db.close()
 
 @app.post("/api/cart/calculate")
 async def calculate_cart(request: Request):
+    db = SessionLocal()
     try:
         payload = await request.json()
         items = payload.get("items", [])
         
-        # 1. Bulletproof Grouping
-        group_counts = {}
-        for item in items:
-            # Grabs tier_name. If null, grabs category_id.
-            group_key = str(item.get('tier_name') or item.get('category_id') or 'unknown')
-            qty = int(item.get('qty') or 1)
-            group_counts[group_key] = group_counts.get(group_key, 0) + qty
-                
+        # 1. Grab the ultimate source of truth from the DB so we don't rely on the frontend
+        query = "SELECT product_id, category_id, name FROM products"
+        db_products = {str(row.product_id): row for row in db.execute(text(query)).fetchall()}
+        
+        flower_qty = 0
         raw_total = 0.0
+        
+        # 2. Count total flower items in the cart
+        for item in items:
+            pid = str(item.get('product_id'))
+            qty = int(item.get('qty') or 1)
+            
+            # Look up the real item in the database
+            db_item = db_products.get(pid)
+            
+            frontend_cat = str(item.get('category_id') or '').lower()
+            frontend_tier = str(item.get('tier_name') or '').lower()
+            db_cat = str(db_item.category_id).lower() if db_item else ''
+            db_name = str(db_item.name).lower() if db_item else ''
+            
+            # MASSIVE NET: If it looks like a flower in ANY way, count it.
+            if frontend_cat == '1' or db_cat == '1' or 'flower' in frontend_tier or 'flower' in db_name:
+                flower_qty += qty
+
         discount_applied = 0.0
         
-        # 2. Math Engine
+        # 3. Apply the math
         for item in items:
-            price = float(item.get('base_sticker_price') or 0)
+            pid = str(item.get('product_id'))
             qty = int(item.get('qty') or 1)
-            group_key = str(item.get('tier_name') or item.get('category_id') or 'unknown')
+            price = float(item.get('base_sticker_price') or 0)
             
-            item_total = price * qty
-            raw_total += item_total
+            db_item = db_products.get(pid)
+            frontend_cat = str(item.get('category_id') or '').lower()
+            frontend_tier = str(item.get('tier_name') or '').lower()
+            db_cat = str(db_item.category_id).lower() if db_item else ''
+            db_name = str(db_item.name).lower() if db_item else ''
             
-            # BULK LOGIC: Checks if the group is 'Flower' OR ID '1'. 
-            # If the total items in that group are 2 or more, apply the discount to all.
-            if group_key in ['Flower', '1'] and group_counts.get(group_key, 0) >= 2:
+            raw_total += (price * qty)
+            
+            # Apply the $5 off per unit IF they hit the 2+ threshold
+            if (frontend_cat == '1' or db_cat == '1' or 'flower' in frontend_tier or 'flower' in db_name) and flower_qty >= 2:
                 discount_applied += (5.0 * qty)
                 
         final_total = max(0.0, raw_total - discount_applied)
@@ -74,4 +93,6 @@ async def calculate_cart(request: Request):
             "final_cash_total": float(final_cash_total)
         }
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e), "raw_total": 0.0, "discount_applied": 0.0, "final_cash_total": 0.0}
+    finally:
+        db.close()
