@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from fastapi.middleware.cors import CORSMiddleware
 import os
 
-# Connects to your Supabase Database
+# --- 1. Database Connection ---
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/delivery_app")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -15,18 +15,25 @@ def get_db():
     try: yield db
     finally: db.close()
 
-# Boots up the API
+# --- 2. Initialize FastAPI ---
 app = FastAPI(title="Delivery App API")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware, 
+    allow_origins=["*"], 
+    allow_credentials=True, 
+    allow_methods=["*"], 
+    allow_headers=["*"]
+)
 
-# --- CART CALCULATION ROUTE ---
+# --- 3. Cart Calculation Route ---
 @app.post("/api/cart/calculate")
 async def calculate_cart(request: Request):
     payload = await request.json()
     cart_items = payload.get("items", [])
     
-    # Simple calculation logic
+    # Calculate totals
     raw_total = sum((item.get('base_sticker_price', 0) * item.get('qty', 1)) for item in cart_items)
+    # Apply $5 rounding rule
     final_cash_total = round(raw_total / 5.0) * 5
     
     return {
@@ -35,7 +42,7 @@ async def calculate_cart(request: Request):
         "final_cash_total": final_cash_total
     }
 
-# --- ADMIN ROUTES ---
+# --- 4. Admin Routes ---
 admin_router = APIRouter(prefix="/api/admin")
 
 @admin_router.get("/cash-bank")
@@ -61,7 +68,6 @@ def get_all_products(db: Session = Depends(get_db)):
         FROM products p
         LEFT JOIN categories c ON p.category_id = c.category_id
         LEFT JOIN price_tiers t ON p.tier_id = t.tier_id
-        WHERE p.is_visible = TRUE
     """
     result = db.execute(text(query)).fetchall()
     return [dict(row._mapping) for row in result]
@@ -93,13 +99,13 @@ def create_promotion(payload: PromotionPayload, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "Promotion active"}
 
-class OrderStatusPayload(BaseModel):
-    status: str
-
 @admin_router.get("/orders/active")
 def get_active_orders(db: Session = Depends(get_db)):
     result = db.execute(text("SELECT order_id, user_id, status, final_rounded_total FROM orders WHERE status != 'Completed' ORDER BY created_at ASC")).fetchall()
     return [dict(row._mapping) for row in result]
+
+class OrderStatusPayload(BaseModel):
+    status: str
 
 @admin_router.post("/orders/{order_id}/status")
 def update_order_status(order_id: int, payload: OrderStatusPayload, db: Session = Depends(get_db)):
