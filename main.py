@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+import traceback
 
-app = FastAPI()
+app = FastAPI(title="Delivery App API")
 
-# FORCE CORS: This is the most permissive setting possible
+# Allow all origins for your frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -12,16 +13,19 @@ app.add_middleware(
     allow_credentials=True,
 )
 
+@app.get("/")
+def health_check():
+    return {"status": "online"}
+
 @app.post("/api/cart/calculate")
 async def calculate_cart(request: Request):
     try:
         payload = await request.json()
         items = payload.get("items", [])
         
-        # Hardened calculation logic
-        raw_total = 0
+        # Hardened calculation
+        raw_total = 0.0
         for item in items:
-            # Use 0 as default if keys are missing
             price = float(item.get('base_sticker_price') or 0)
             qty = int(item.get('qty') or 0)
             raw_total += (price * qty)
@@ -33,8 +37,5 @@ async def calculate_cart(request: Request):
             "final_cash_total": float(final_cash_total)
         }
     except Exception as e:
-        # This will tell us exactly WHY it's 500ing
-        return {"error": str(e)}
-
-@app.get("/")
-def health(): return {"status": "online"}
+        # If this crashes, you will see the exact error in the frontend Network tab
+        return {"error": str(e), "traceback": traceback.format_exc()}
