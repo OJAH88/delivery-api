@@ -11,27 +11,22 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 app = FastAPI(title="Delivery App API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
 
-# THE ROUTE THAT WAS CAUSING THE 404
 @app.get("/api/admin/products")
 def get_products():
     db = SessionLocal()
     try:
-        # Fetching product and tier info
         query = """
-            SELECT p.product_id, p.name, p.base_sticker_price, p.category_id, t.name as tier_name 
+            SELECT p.product_id, p.name, p.base_sticker_price, t.name as tier_name 
             FROM products p
             LEFT JOIN price_tiers t ON p.tier_id = t.tier_id
         """
         result = db.execute(text(query)).fetchall()
         return [dict(row._mapping) for row in result]
-    except Exception as e:
-        return {"error": str(e)}
     finally:
         db.close()
 
 @app.post("/api/cart/calculate")
 async def calculate_cart(request: Request):
-    db = SessionLocal()
     try:
         payload = await request.json()
         items = payload.get("items", [])
@@ -40,12 +35,10 @@ async def calculate_cart(request: Request):
             price = float(item.get('base_sticker_price') or 0)
             qty = int(item.get('qty') or 1)
             tier = item.get('tier_name')
-            # Apply your specific bulk pricing logic here
+            # Bulk logic: Flower tier gets $5 off per item if qty >= 2
             if tier == 'Flower' and qty >= 2:
                 price = price - 5.0
             raw_total += (price * qty)
         return {"raw_total": float(raw_total), "final_cash_total": round(raw_total / 5.0) * 5}
     except Exception as e:
         return {"error": str(e)}
-    finally:
-        db.close()
