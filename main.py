@@ -4,40 +4,51 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 import os
 
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/delivery_app")
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Database Setup
-engine = create_engine(os.getenv("DATABASE_URL", "postgresql://user:password@localhost/delivery_app"))
+app = FastAPI(title="Delivery App API")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
 
 @app.post("/api/cart/calculate")
 async def calculate_cart(request: Request):
+    db = SessionLocal()
     try:
         payload = await request.json()
         items = payload.get("items", [])
         
-        # Calculate raw_total with fallback to 0
-        raw_total = sum(float(item.get('base_sticker_price') or 0) * int(item.get('qty') or 1) for item in items)
+        # 1. Aggregate quantities per category
+        cat_quantities = {}
+        raw_total = 0.0
+        for item in items:
+            cat_id = str(item.get('category_id'))
+            qty = int(item.get('qty') or 1)
+            price = float(item.get('base_sticker_price') or 0)
+            
+            cat_quantities[cat_id] = cat_quantities.get(cat_id, 0) + qty
+            raw_total += (price * qty)
         
-        # Calculate final total
-        final_total = max(0.0, float(raw_total))
+        # 2. Check promotions
+        promos = db.execute(text("SELECT * FROM promotions")).fetchall()
+        total_discount = 0.0
+        
+        for p in promos:
+            trigger_cat = str(p.trigger_category_id)
+            if cat_quantities.get(trigger_cat, 0) >= p.trigger_qty_threshold:
+                # Apply discount logic
+                if p.reward_type == 'flat_discount':
+                    total_discount += p.reward_value
+        
+        final_total = max(0.0, raw_total - total_discount)
         final_cash_total = round(final_total / 5.0) * 5
         
         return {
             "raw_total": float(raw_total),
-            "discount_applied": 0.0,
+            "discount_applied": float(total_discount),
             "final_cash_total": float(final_cash_total)
         }
     except Exception as e:
-        # If it fails, return a safe object so the frontend doesn't break
-        return {"raw_total": 0.0, "discount_applied": 0.0, "final_cash_total": 0.0, "error": str(e)}
-
-@app.get("/api/admin/products")
-def get_products():
-    try:
-        db = sessionmaker(bind=engine)()
-        result = db.execute(text("SELECT product_id, name, COALESCE(base_sticker_price, 0.0) as base_sticker_price FROM products")).fetchall()
+        return {"error": str(e), "raw_total": 0.0, "discount_applied": 0.0, "final_cash_total": 0.0}
+    finally:
         db.close()
-        return [dict(row._mapping) for row in result]
-    except:
-        return []
