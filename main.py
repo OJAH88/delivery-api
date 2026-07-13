@@ -18,37 +18,30 @@ async def calculate_cart(request: Request):
         payload = await request.json()
         items = payload.get("items", [])
         
-        # 1. Aggregate quantities per category
-        cat_quantities = {}
         raw_total = 0.0
+        
+        # Aggregate quantity per product and apply Tier logic
         for item in items:
-            cat_id = str(item.get('category_id'))
-            qty = int(item.get('qty') or 1)
             price = float(item.get('base_sticker_price') or 0)
+            qty = int(item.get('qty') or 1)
+            tier_name = item.get('tier_name') # This comes from your JOIN in the products table
             
-            cat_quantities[cat_id] = cat_quantities.get(cat_id, 0) + qty
+            # BULK LOGIC: Apply tier discounts based on quantity
+            # Example: If tier is 'Flower', apply specific bulk price scaling
+            if tier_name == 'Flower' and qty >= 2:
+                # Example bulk rule: $X off per item for qty 2+
+                price = price - 5.0 
+            
             raw_total += (price * qty)
         
-        # 2. Check promotions
-        promos = db.execute(text("SELECT * FROM promotions")).fetchall()
-        total_discount = 0.0
-        
-        for p in promos:
-            trigger_cat = str(p.trigger_category_id)
-            if cat_quantities.get(trigger_cat, 0) >= p.trigger_qty_threshold:
-                # Apply discount logic
-                if p.reward_type == 'flat_discount':
-                    total_discount += p.reward_value
-        
-        final_total = max(0.0, raw_total - total_discount)
-        final_cash_total = round(final_total / 5.0) * 5
+        final_cash_total = round(raw_total / 5.0) * 5
         
         return {
             "raw_total": float(raw_total),
-            "discount_applied": float(total_discount),
+            "discount_applied": 0.0, # We don't need this if we use tiered pricing
             "final_cash_total": float(final_cash_total)
         }
     except Exception as e:
-        return {"error": str(e), "raw_total": 0.0, "discount_applied": 0.0, "final_cash_total": 0.0}
+        return {"error": str(e)}
     finally:
         db.close()
