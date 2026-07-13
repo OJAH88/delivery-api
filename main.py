@@ -14,7 +14,7 @@ def get_db():
     try: yield db
     finally: db.close()
 
-app = FastAPI()
+app = FastAPI(title="Delivery App API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
 
 @app.get("/")
@@ -34,13 +34,13 @@ async def calculate_cart(request: Request):
 @app.get("/api/admin/products")
 def get_products(db: Session = Depends(get_db)):
     try:
-        # Simplest query possible to test connection
         query = "SELECT product_id, name, base_sticker_price FROM products"
         result = db.execute(text(query)).fetchall()
-        # Convert to list of dicts
-        products = [dict(zip(row.keys(), row)) for row in result]
-        print(f"DEBUG: Found {len(products)} products")
+        # FIX: Use _mapping to correctly convert SQLAlchemy rows to dicts
+        products = [dict(row._mapping) for row in result]
         return products
     except Exception as e:
         print(f"DEBUG ERROR: {traceback.format_exc()}")
         return []
+
+app.include_router(APIRouter(prefix="/api/admin"))
