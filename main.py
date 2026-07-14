@@ -1,100 +1,85 @@
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
-import os
+'use client';
+import { useEffect, useState } from 'react';
+import BundleBuilder from '../components/BundleBuilder';
+import CartDrawer from '../components/CartDrawer';
 
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
+// --- YOUR PRICING CONFIGURATIONS ---
+const CONFIGS = {
+  tier1: [
+    { id: 't1_8', label: '1/8 oz', slots: 1, price: 45.0 },
+    { id: 't1_4', label: '1/4 oz', slots: 2, price: 80.0 },
+    { id: 't1_2', label: '1/2 oz', slots: 4, price: 150.0 },
+    { id: 't1_1', label: '1 oz', slots: 8, price: 280.0 }
+  ],
+  tier2: [
+    { id: 't2_8', label: '1/8 oz', slots: 1, price: 35.0 },
+    { id: 't2_4', label: '1/4 oz', slots: 2, price: 60.0 },
+    { id: 't2_2', label: '1/2 oz', slots: 4, price: 110.0 },
+    { id: 't2_1', label: '1 oz', slots: 8, price: 200.0 }
+  ],
+  tier3: [
+    { id: 't3_8', label: '1/8 oz', slots: 1, price: 25.0 },
+    { id: 't3_4', label: '1/4 oz', slots: 2, price: 45.0 },
+    { id: 't3_2', label: '1/2 oz', slots: 4, price: 80.0 },
+    { id: 't3_1', label: '1 oz', slots: 8, price: 150.0 }
+  ],
+  bho: [
+    { id: 'bho_1', label: '1g', slots: 1, price: 30.0 },
+    // If 3.5g is one bucket of a single strain, slot = 1. If it's mix & match 3.5 units, that gets messy. 
+    // Assuming they pick 1 strain for the 3.5g jar here:
+    { id: 'bho_35', label: '3.5g Bucket', slots: 1, price: 90.0 }, 
+    { id: 'bho_7', label: '7g', slots: 7, price: 170.0 }, // Mix & match 7x 1g jars
+    { id: 'bho_14', label: '14g', slots: 14, price: 300.0 },
+    { id: 'bho_28', label: '28g', slots: 28, price: 550.0 }
+  ]
+};
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/delivery_app")
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+export default function Home() {
+  const [products, setProducts] = useState([]);
 
-@app.get("/api/admin/products")
-def get_products():
-    db = SessionLocal()
-    try:
-        try:
-            query = """
-                SELECT p.product_id, p.name, COALESCE(p.base_sticker_price, 0.0) as base_sticker_price, p.category_id, t.name as tier_name 
-                FROM products p
-                LEFT JOIN price_tiers t ON p.tier_id = t.tier_id
-            """
-            result = db.execute(text(query)).fetchall()
-        except:
-            query = "SELECT product_id, name, COALESCE(base_sticker_price, 0.0) as base_sticker_price, category_id FROM products"
-            result = db.execute(text(query)).fetchall()
-            
-        return [dict(row._mapping) for row in result]
-    except Exception as e:
-        return []
-    finally:
-        db.close()
+  useEffect(() => {
+    fetch('https://delivery-api-jdto.onrender.com/api/admin/products')
+      .then(res => res.json())
+      .then(data => setProducts(Array.isArray(data) ? data : []))
+      .catch(err => console.error(err));
+  }, []);
 
-@app.post("/api/cart/calculate")
-async def calculate_cart(request: Request):
-    db = SessionLocal()
-    try:
-        payload = await request.json()
-        items = payload.get("items", [])
-        
-        # 1. Fetch Dynamic Bulk Rules from Supabase
-        # NOTE: Update 'bulk_pricing_rules' and the column names to match your exact Supabase table!
-        # It must order by quantity descending (e.g., 8, 4, 2) to calculate the largest blocks first.
-        try:
-            rules_query = "SELECT tier_name, threshold_qty, discount_amount FROM bulk_pricing_rules ORDER BY threshold_qty DESC"
-            bulk_rules = db.execute(text(rules_query)).fetchall()
-        except:
-            bulk_rules = [] # Failsafe if the table name is different
-            
-        query = "SELECT product_id, category_id, name FROM products"
-        db_products = {str(row.product_id): row for row in db.execute(text(query)).fetchall()}
-        
-        raw_total = 0.0
-        tier_counts = {}
-        
-        # 2. Pool all items by their Tier Name
-        for item in items:
-            pid = str(item.get('product_id'))
-            qty = int(item.get('qty') or 1)
-            price = float(item.get('base_sticker_price') or 0)
-            
-            raw_total += (price * qty)
-            
-            # Identify the tier safely
-            frontend_tier = str(item.get('tier_name') or 'unknown')
-            tier_counts[frontend_tier] = tier_counts.get(frontend_tier, 0) + qty
+  // Filter your database products into their buckets based on tier_name or category
+  const tier1Strains = products.filter(p => p.tier_name === 'Tier 1');
+  const tier2Strains = products.filter(p => p.tier_name === 'Tier 2');
+  const tier3Strains = products.filter(p => p.tier_name === 'Tier 3');
+  const bhoProducts = products.filter(p => p.category_id === 2); // Assuming 2 is BHO category
 
-        discount_applied = 0.0
+  return (
+    <div className="min-h-screen bg-slate-900 text-slate-100 p-8">
+      <header className="mb-10 text-emerald-400 font-black text-2xl tracking-widest">BRANCH</header>
+      
+      <div className="flex flex-row gap-8 items-start">
+        <main className="flex-1 space-y-8">
+          
+          {/* Render a builder for each category */}
+          {tier1Strains.length > 0 && (
+             <BundleBuilder title="Tier 1 Flower" sizes={CONFIGS.tier1} availableProducts={tier1Strains} baseUnitName="1/8th" />
+          )}
+          
+          {tier2Strains.length > 0 && (
+             <BundleBuilder title="Tier 2 Flower" sizes={CONFIGS.tier2} availableProducts={tier2Strains} baseUnitName="1/8th" />
+          )}
+
+          {tier3Strains.length > 0 && (
+             <BundleBuilder title="Tier 3 Flower" sizes={CONFIGS.tier3} availableProducts={tier3Strains} baseUnitName="1/8th" />
+          )}
+
+          {bhoProducts.length > 0 && (
+             <BundleBuilder title="BHO Concentrates" sizes={CONFIGS.bho} availableProducts={bhoProducts} baseUnitName="1g Jar" />
+          )}
+
+        </main>
         
-        # 3. Dynamic Step-Down Calculation
-        # This breaks the total quantity into the largest possible chunks defined in your DB
-        for tier, total_qty in tier_counts.items():
-            remaining_qty = total_qty
-            
-            # Get only the rules that apply to this specific tier
-            applicable_rules = [r for r in bulk_rules if r.tier_name == tier]
-            
-            for rule in applicable_rules:
-                # How many full blocks of this threshold fit? (e.g., how many halves are in 5 eighths?)
-                num_blocks = remaining_qty // rule.threshold_qty
-                
-                # Apply the specific discount from the database for those blocks
-                discount_applied += (num_blocks * rule.discount_amount)
-                
-                # Update the remainder to carry down to the next smaller threshold
-                remaining_qty = remaining_qty % rule.threshold_qty
-                
-        final_total = max(0.0, raw_total - discount_applied)
-        final_cash_total = round(final_total / 5.0) * 5
-        
-        return {
-            "raw_total": float(raw_total),
-            "discount_applied": float(discount_applied),
-            "final_cash_total": float(final_cash_total)
-        }
-    except Exception as e:
-        return {"error": str(e), "raw_total": 0.0, "discount_applied": 0.0, "final_cash_total": 0.0}
-    finally:
-        db.close()
+        <aside className="w-80 shrink-0 sticky top-8">
+          <CartDrawer />
+        </aside>
+      </div>
+    </div>
+  );
+}
