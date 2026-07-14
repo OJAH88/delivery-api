@@ -23,7 +23,6 @@ def get_products():
             """
             result = db.execute(text(query)).fetchall()
         except:
-            # Fallback if price_tiers table is missing
             query = "SELECT product_id, name, COALESCE(base_sticker_price, 0.0) as base_sticker_price, category_id FROM products"
             result = db.execute(text(query)).fetchall()
             
@@ -40,49 +39,52 @@ async def calculate_cart(request: Request):
         payload = await request.json()
         items = payload.get("items", [])
         
-        # 1. Grab the ultimate source of truth from the DB so we don't rely on the frontend
+        # 1. Fetch Dynamic Bulk Rules from Supabase
+        # NOTE: Update 'bulk_pricing_rules' and the column names to match your exact Supabase table!
+        # It must order by quantity descending (e.g., 8, 4, 2) to calculate the largest blocks first.
+        try:
+            rules_query = "SELECT tier_name, threshold_qty, discount_amount FROM bulk_pricing_rules ORDER BY threshold_qty DESC"
+            bulk_rules = db.execute(text(rules_query)).fetchall()
+        except:
+            bulk_rules = [] # Failsafe if the table name is different
+            
         query = "SELECT product_id, category_id, name FROM products"
         db_products = {str(row.product_id): row for row in db.execute(text(query)).fetchall()}
         
-        flower_qty = 0
         raw_total = 0.0
+        tier_counts = {}
         
-        # 2. Count total flower items in the cart
-        for item in items:
-            pid = str(item.get('product_id'))
-            qty = int(item.get('qty') or 1)
-            
-            # Look up the real item in the database
-            db_item = db_products.get(pid)
-            
-            frontend_cat = str(item.get('category_id') or '').lower()
-            frontend_tier = str(item.get('tier_name') or '').lower()
-            db_cat = str(db_item.category_id).lower() if db_item else ''
-            db_name = str(db_item.name).lower() if db_item else ''
-            
-            # MASSIVE NET: If it looks like a flower in ANY way, count it.
-            if frontend_cat == '1' or db_cat == '1' or 'flower' in frontend_tier or 'flower' in db_name:
-                flower_qty += qty
-
-        discount_applied = 0.0
-        
-        # 3. Apply the math
+        # 2. Pool all items by their Tier Name
         for item in items:
             pid = str(item.get('product_id'))
             qty = int(item.get('qty') or 1)
             price = float(item.get('base_sticker_price') or 0)
             
-            db_item = db_products.get(pid)
-            frontend_cat = str(item.get('category_id') or '').lower()
-            frontend_tier = str(item.get('tier_name') or '').lower()
-            db_cat = str(db_item.category_id).lower() if db_item else ''
-            db_name = str(db_item.name).lower() if db_item else ''
-            
             raw_total += (price * qty)
             
-            # Apply the $5 off per unit IF they hit the 2+ threshold
-            if (frontend_cat == '1' or db_cat == '1' or 'flower' in frontend_tier or 'flower' in db_name) and flower_qty >= 2:
-                discount_applied += (5.0 * qty)
+            # Identify the tier safely
+            frontend_tier = str(item.get('tier_name') or 'unknown')
+            tier_counts[frontend_tier] = tier_counts.get(frontend_tier, 0) + qty
+
+        discount_applied = 0.0
+        
+        # 3. Dynamic Step-Down Calculation
+        # This breaks the total quantity into the largest possible chunks defined in your DB
+        for tier, total_qty in tier_counts.items():
+            remaining_qty = total_qty
+            
+            # Get only the rules that apply to this specific tier
+            applicable_rules = [r for r in bulk_rules if r.tier_name == tier]
+            
+            for rule in applicable_rules:
+                # How many full blocks of this threshold fit? (e.g., how many halves are in 5 eighths?)
+                num_blocks = remaining_qty // rule.threshold_qty
+                
+                # Apply the specific discount from the database for those blocks
+                discount_applied += (num_blocks * rule.discount_amount)
+                
+                # Update the remainder to carry down to the next smaller threshold
+                remaining_qty = remaining_qty % rule.threshold_qty
                 
         final_total = max(0.0, raw_total - discount_applied)
         final_cash_total = round(final_total / 5.0) * 5
